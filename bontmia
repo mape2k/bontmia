@@ -1,0 +1,740 @@
+#!/bin/bash
+#
+# bontmia (Backup Over Network To Multiple Incremental Archives)
+#
+# This was written to get the functionality of glastree (Jeremy Wohl)
+# available to use towards remote hosts and having a selective long
+# term storage.
+#
+# Written by John Enok Vollestad in April 2003 and have later
+# undergone some bugfixes and enhancements.
+
+print_usage()
+{
+    cat <<EOF | ${PAGER:-more}
+
+NAME
+        Bontmia - Backup Over Network To Multiple Incremental Archives
+        Version 0.14
+
+SYNOPSIS
+        bontmia --dest <dest. dir> [options] [source dir [source dir ...]]
+
+DESCRIPTION
+        Bontmia is a network-based backup tool that saves configurable
+        numbers of last month, week, day, hour, and minute backups.
+        Each backup is a complete snapshot of the original
+        directories.  Only new and changed files are copied over the
+        network when generating a snapshot.  Remote access is
+        implemented securely using ssh.  Unchanged files are stored as
+        hard links in the archive and therefore takes virtually no
+        space.
+
+        The backups is stored in a directory structure in the format
+        YYYY/MM/DD/HH:MM.  Each directory contains a snapshot of the
+        backed up directories.  This is stored incrementally by
+        letting every file not changed between backups be a hard link
+        to the same file in the previous backup.  The actual copying
+        is done with rsync.  To avoid typing inn a password you do as
+        usual with ssh by generating a public key on the host where
+        the backup is stored, read the manual page for ssh, and adding
+        this to the list of authorized hosts on the remote computer,
+        read the manual page for sshd.
+
+        Which backup to store for how long is configurable, see below.
+
+        The return value is 0 on success and 1 if backing up one of
+        the sources failed.
+
+        The destination can not be remote.  If you want to place the
+        backup on a remote server, then run Bontmia as a command with
+        ssh like "ssh user@host.domain bontmia <options>".
+
+        Use at your own risk.
+
+ARGUMENTS
+        --dest <dir> 
+                Sets the destination directories where the backups is
+                placed.  WARNING! existing files in this directory
+                will be DELETED!
+
+
+OPTIONS
+        --rotation <spec>
+
+                Specifies the number of backups in each category to
+                save.  The 'spec' is of the form
+
+          [0-9]*minutes[0-9]*hours[0-9]*days[0-9]*weeks[0-9]*month[0-9]*years
+
+                so 0minutes0hours7days4weeks12month2years is an
+                example for daily backup.  Bontmia should be run in
+                cron or manually the numbers given here only specifies
+                how many backups to save.
+
+                The different categories (minutes, hours ...) is just
+                overlapping filters.  More than one filter might save
+                a backup and a backup is removed when no filter saves
+                the backup any more.
+
+                The number of days given here will apply like this:
+
+                If the number of days to save is 3 then the last
+                backup within each of the last 3 days when backup were
+                done willl be saved.  This means that if you do backup
+                like this:
+
+                day:    0 1 2 3 4 5
+                backup: y - y - y y
+
+                Where y means a backup were done and - means it were
+                not then after the backup done on day 5 is done, then
+                the backups on day 2, 4 and 5 is saved when the last 3
+                day backups is saved.  Use the dryrun option below to
+                experiment and learn more about this option.
+
+        --dryrun
+                When this option is used, the backup is not performed,
+                but the backups to be removed is listed.  This is
+                handy when you want to ensure that you do not remove
+                all the precious backups when used in combination with
+                the rotation option.
+
+        --bwlimit <number>
+                Specifies a maximum transfer rate in kilobytes per
+                second. This option is most effective with large files
+                (several megabytes and up). Due to the nature of rsync
+                transfers, blocks of data are sent, then if rsync
+                determines the transfer was too fast, it will wait
+                before sending the next data block. The result is an
+                average transfer rate equalling the specified limit. A
+                value of zero specifies no limit.  The default is no
+                limit.
+
+        --temp <temp dir>
+                Specifies the directory used for temporary files during
+                transfer.  NB! This MUST be on the same disk volume as
+                destination or incremental copy will not work.
+
+        --port <number>
+                Specifies the port number to connect to on the remote
+                host when using ssh, which is the only option.
+
+
+EXAMPLES
+        bontmia --dest ./backup  --rotation \\
+                5minutes0hours0days0weeks0month0years \\
+                foo@bar:/baz/zoot
+
+        Here there is made a copy of foo@bar:/baz/zoot in the
+        directory backup on the local host.  If this command is run
+        every minute, there is store one backup for every minute for
+        the last 5 minutes.  If it is run once every day.  There is
+        still stored the last 5 backups done at unique minutes so the
+        last 5 backups is stored which means 5 last days.
+
+        Hint: set the values for times shorter than the interval used
+              when doing backup to 0.
+
+        bontmia --dest ./backup  --rotation \\
+                0minutes0hours7days4weeks12month0years \\
+                foo@bar:/baz/zoot
+
+        Here there will at the most be stored 7 + 4 + 12 backups
+        (minus overlap between the backups).  This can be a good
+        command to run nightly.
+
+
+        bontmia --dest ./backup  --rotation \\
+                0minutes24hours7days4weeks12month0years \\
+                foo@bar:/baz/zoot
+
+        This is for running every hour.  Remember that only the
+        changes is transferred and running more often not necessarily
+        will mean copying more data over the network.
+
+
+        bontmia --dryrun --dest ./backup  --rotation \\
+                0minutes24hours7days4weeks12month0years \\
+                /home/bar/baz foo.no:/var/db
+
+        With the dryrun option it show what would happen if the backup
+        were run.  No action on the file system done.
+
+
+        When bontmia runs it sends output to standard output.  If you
+        do not want this you can redirect it to /dev/null.
+
+CONTACT
+        Bontmia was written in april 2003 by John Enok Vollestad
+        <john.enok@vollestad.no> to merge the functionality of
+        glastree and rsync in one application with a more flexible
+        selection of long term storage.  It has later undergone some
+        bugfixes and enhancements. http://folk.uio.no/johnen/bontmia/
+
+EOF
+    exit 1
+}
+
+
+unlock_destination()
+{
+    rm -f "${tmpdir}/is_running.lock"
+}
+
+
+lock_destination()
+{
+    # Ensure that there is no other bontmia running against the same destination
+    touch /tmp/bontmia_lock_file.$$
+    echo "no" | mv -i /tmp/bontmia_lock_file.$$ "${tmpdir}"/is_running.lock 2>&1 | \
+	grep "overwrite" >/dev/null 2>&1 && {
+	echo "Bontmia is already doing a backup on this tmpdir:"
+	echo "    ${tmpdir}"
+	echo
+	echo "    If you are sure this is false you can manually remove the lockfile:"
+	echo "        ${tmpdir}/is_running.lock"
+	echo
+	exit 1
+    }
+}
+
+
+full_name() {
+    host="${1}";
+    if host ${host} | grep "domain name pointer" >/dev/null; then
+	host ${host} | cut -f5 -d' ' | sed -e 's/\.$//';
+    else
+	if host ${host} | grep "has address" >/dev/null; then
+	    full_name $(host ${host} | grep "has address" | cut -f4 -d' ');
+	fi;
+    fi;
+}
+
+
+filter_template()
+{
+    attribute="${1}"
+    grep_value="${2}"
+    last_number="${3}"
+    sort_options="${4}"
+    template_name="${5}"
+
+    if test "x${sort_options}" != x; then
+	sort="sort ${sort_options}"
+    else
+	sort="cat"
+    fi
+
+    (
+	cd "${backup_destination}"
+	for archive in */*/*/*; do
+	    year=$(echo ${archive} | cut -f1 -d'/')
+	    month=$(echo ${archive} | cut -f2 -d'/')
+	    day=$(echo ${archive} | cut -f3 -d'/')
+	    the_clock=$(echo ${archive} | cut -f4 -d'/')
+	    
+	    the_date=${year}-${month}-${day}
+	    date -d "${the_date}" "+%Y/%m/%d/${the_clock}@${template_name}@${attribute}" || {
+		echo "Could not read the time of a previous backup"
+		echo "Please email the author"
+		unlock_destination
+		exit 1
+	    }
+	done | egrep "@.*@${grep_value}" | sort -r | ${sort} | tail -${last_number}
+    )
+}
+
+
+handle_last_unfinished()
+{
+    if test -e ${tmpdir}/unfinished_backup/*; then
+	echo
+	echo "WARNING: Last backup did not complete"
+	echo "  This unfinished backup is now removed"
+	echo
+	chmod -R u+w "${tmpdir}/unfinished_backup"
+	rm -rf "${tmpdir}/unfinished_backup"
+    fi
+}
+
+
+make_hard-link_copy_of_last_backup()
+{
+    last_backup=$(find ${backup_destination} -maxdepth 4 -mindepth 4 | sort | tail -1)
+    if test x${last_backup} != x ; then
+	echo "Making a hard-link replication of the last backup"
+	echo "  (${last_backup})"
+	if test "x${dryrun}" == "xno"; then
+	    mkdir -p "${tmpdir}/unfinished_backup/${this_backup}" || {
+		unlock_destination
+		exit 1
+	    }
+	    cp -lR "${last_backup}/"* "${tmpdir}/unfinished_backup/${this_backup}" >/dev/null 2>&1 || {
+		echo "    WARNING: The last backup had NO files!"
+		echo "             Or tmpdir is not on the same volume as destination"
+	    }
+	fi
+	first="no"
+    else
+	echo "No previous backup detected, will start with an empty replication"
+	if test "x${dryrun}" == "xno"; then
+	    mkdir -p "${tmpdir}/unfinished_backup/$this_backup" || {
+		unlock_destination
+		exit 1
+	    }
+	fi
+	first="yes"
+    fi
+}
+
+
+moving_complete_backup_into_archive()
+{
+    echo
+    echo "Moving the complete backup into the backup archive"
+    echo "  ($tmpdir/unfinished_backup -> $backup_destination/)"
+    
+    if test "x$dryrun" == "xno"; then
+	mkdir -p "$backup_destination/$this_backup" || {
+	    unlock_destination
+	    exit 1
+	}
+	mv "$tmpdir/unfinished_backup/$this_backup/"* "$backup_destination/$this_backup/" || {
+	    unlock_destination
+	    exit 1
+	}
+    fi
+}
+
+
+do_the_backup_exist()
+{
+    if test -e "$backup_destination/$1"; then
+	echo "The backup destination already exist"
+	echo "This means that there is less than a minute since the last backup"
+	unlock_destination
+	exit 1
+    fi
+}
+
+
+make_backup()
+{
+    this_backup=$(date +%Y)/$(date +%m)/$(date +%d)/$(date +%H\:%M)
+
+    do_the_backup_exist "$this_backup"
+
+    handle_last_unfinished
+    make_hard-link_copy_of_last_backup
+
+    # Apply changes to the hard-link copy
+    echo
+    if test "x$first" == "xyes"; then
+	echo "Backing up"
+    else
+	echo "Backing up by modifying the replication"
+    fi
+
+    for dir in ${backup_dirs} ; do
+	dir_wo_user=$(echo "$dir" | cut -f2- -d'@')
+	echo "  ${dir_wo_user}"
+	hostname=$(echo "$dir" | cut -f2- -d'@' | cut -f1 -d':')":"
+	userhost=$(echo "$dir" | cut -f1 -d':')
+
+	if test "x$hostname" == "x$(hostname):"; then
+	    # remove hostname from dir to speed up local backup
+	    dir=$(echo "$dir" | cut -f2 -d':')
+	fi
+
+	if test "x$dryrun" == "xno"; then
+	    mkdir -p "$tmpdir/unfinished_backup/$this_backup/$hostname"
+
+	    rsync ${rsync_options} -e "ssh -p $port" "${dir}" "${tmpdir}/unfinished_backup/$this_backup/${hostname}" 2>&1 >/tmp/bontmia_rsync_output.$$ || {
+		echo
+		echo "  Caught an error doing rsync (return code $?)"
+		echo "  The last 10 lines of output from rsync:"
+		tail -10 /tmp/bontmia_rsync_output.$$
+		echo
+		echo "  Retrying rsync..."
+		rsync ${rsync_options} -e "ssh -p $port" "${dir}" "${tmpdir}/unfinished_backup/$this_backup/${hostname}" 2>&1 >/tmp/bontmia_rsync_output.$$ || {
+		    echo
+		    echo "  Still no luck.  Rsync failed with returncode $?"
+		    echo "  $dir"
+		    echo "  Please check that there is room for all the data"
+		    echo "  The last 10 lines of output from rsync:"
+		    tail -10 /tmp/bontmia_rsync_output.$$.2
+		    echo
+		    echo
+		    echo "  Continuing with the next backup source"
+		    echo
+		    exit_status="1"
+		}
+	    }
+	fi
+    done
+    
+    delete_outside_sync "${tmpdir}/unfinished_backup/$this_backup/"
+    
+    moving_complete_backup_into_archive
+
+    if test "x$dryrun" == "xno"; then
+	chmod -R u+w ${tmpdir}/unfinished_backup
+	rm -rf "$tmpdir/unfinished_backup"
+    fi
+}
+
+
+delete_old_backup()
+{
+    echo
+    echo "Calculates which backups to save"
+    echo "($filter_minutes minutes, $filter_hours hours, $filter_days days, $filter_weeks weeks, $filter_monthly months, $filter_years years)"
+
+    # by saving the x last, the backups will not be deleted even if no
+    # new backups is created
+
+#    archives_to_save=$( (
+
+    archives_with_filter=$(
+	    if ! test "0$filter_minutes" -ge 0 2>/dev/null; then
+		print_usage
+	    else
+		filter_template "" "" "$filter_minutes" "-u" "minutes"
+	    fi
+
+	    if ! test "0$filter_hours" -ge 0 2>/dev/null; then
+		print_usage
+	    else
+		filter_template "" "" "$filter_hours" "-u -k 1,1 -t :" "hours"
+	    fi
+
+	    if ! test "0$filter_days" -ge 0 2>/dev/null; then
+		print_usage
+	    else
+		filter_template "" "" "$filter_days" "-u -k 1,3 -t /" "days"
+	    fi
+
+	    if ! test "0$filter_weeks" -ge 0 2>/dev/null; then
+		print_usage
+	    else
+		filter_template "%Y-%V" "" "$filter_weeks" "-u -k 3 -t @" "weeks"
+	    fi
+
+	    if ! test "0$filter_monthly" -ge 0 2>/dev/null; then
+		print_usage
+	    else
+		filter_template "%B" "" "$filter_monthly" "-u -k 1,2 -t /" "month"
+	    fi
+
+	    if ! test "0$filter_years" -ge 0 2>/dev/null; then
+		print_usage
+	    else
+		filter_template "%Y" "" "$filter_years" "-u -k 1,1 -t /" "years"
+	    fi
+    )
+    
+    archives_to_save=$(echo "$archives_with_filter" | cut -f1 -d'@' | sort -u)
+
+    (
+	cd ${backup_destination}
+	for archive in */*/*/*; do
+	    if ! echo "${archives_to_save}" | grep "^${archive}$" >/dev/null; then
+		echo "  Removing ${backup_destination}/$archive"
+		if test "x$dryrun" == "xno"; then
+		    chmod -R u+w ${archive}
+		    rm -rf ${archive}
+		    rmdir -p $(echo ${archive} | cut -f1-3 -d'/') 2>/dev/null
+		fi
+	    else
+		echo -n "  Saving ${backup_destination}/$archive by filters:  "
+		filters=$(echo "$archives_with_filter" | grep "${archive}" | cut -f2 -d'@')
+		echo $filters
+	    fi
+	done
+    )
+}
+
+
+delete_outside_sync()
+{
+    # Since we do a copy from last sync with cp -l, we have to
+    # remove the extras here
+
+    echo
+    echo "Deletes files that should not be in the latest snapshot"
+    if test "x$dryrun" == "xno"; then
+	(
+	    cd $1
+	    IFS='
+'
+	    for f in $(find -mindepth 1 -depth | egrep -v "$bdirmatch"); do
+		if test -e "$f" ||
+		    test -h "$f"; then
+		    rmdir "$f" 2>/dev/null
+		    rm -f "$f" 2>/dev/null
+		fi
+	    done
+	    unset IFS
+	)
+    fi
+}
+
+
+knead_source_path()
+{
+    source="$1"
+
+    # remove trailing '/'
+    if echo "$source" | grep "/$" >/dev/null; then
+	source=$(echo "$source" | sed -e 's/\/$//')
+    fi
+    
+    # make the path absolute
+    if ! echo "$source" | grep ":" >/dev/null &&
+	! echo "$source" | grep "^/" >/dev/null; then
+	if echo "$source" | grep "^./" >/dev/null; then
+	    source=$(echo "$source" | sed -e 's/^\.\///')
+	fi
+	source="$current_dir/$source"
+    fi
+
+    echo "$source"
+}
+
+
+knead_dest_path()
+{
+    dest="$1"
+
+    if echo "$dest" | grep ":" >/dev/null; then
+	# The destination can not be remote
+	print_usage
+    fi
+
+    # remove trailing '/'
+    if echo "$dest" | grep "/$" >/dev/null; then
+	dest=$(echo "$dest" | sed -e 's/\/$//')
+    fi
+
+    # make the path absolute
+    if ! echo "$dest" | grep "^/" >/dev/null; then
+	if echo "$dest" | grep "^./" >/dev/null; then
+	    dest=$(echo "$dest" | sed -e 's/^\.\///')
+	fi
+	dest="$current_dir/$dest"
+    fi
+
+    echo "$dest"
+}
+
+
+check_program()
+{
+    program="$1"
+    type -a "$program" >/dev/null 2>&1 } || {
+	echo "You need $program installed and in the path"
+	echo "Aborting"
+	unlock_destination
+	exit 1
+    }
+}
+
+
+check_for_programs()
+{
+    check_program rsync
+    check_program host
+    check_program date
+    find /tmp -maxdepth 1 -mindepth 1 >/dev/null 2>/dev/null || {
+	echo "'find' on your system does not support the '--maxdepth' and"
+	echo "'--mindepth' options"
+	echo "You might not have the GNU version of 'find'"
+	echo "Aborting"
+	unlock_destination
+	exit 1
+    }
+    date -d 20030303 >/dev/null 2>/dev/null || {
+	echo "'date' on your system does not support the '--date' option"
+	echo "You might not have the GNU version of 'date'"
+	echo "Aborting"
+	unlock_destination
+	exit 1
+    }
+    check_program cp
+    touch /tmp/bontmia_test_cp_file.$$ || {
+	echo "Could not create a temporary file on /tmp"
+	echo "Please make sure that /tmp is writable"
+	echo "Aborting"
+	unlock_destination
+	exit 1
+    }
+    cp -l /tmp/bontmia_test_cp_file.$$ /tmp/bontmia_test_cp_file.$$.2 >/dev/null 2>&1 || {
+	echo "cp on your system does not support the -l option"
+	echo "You might not have the GNU version of 'cp'"
+	echo "Aborting"
+	unlock_destination
+	exit 1
+    }
+    rm -f /tmp/bontmia_test_cp_file.$$ /tmp/bontmia_test_cp_file.$$.2
+}
+
+
+#################################################################
+
+
+if test "x$*" == x; then
+    print_usage
+fi
+
+current_dir=$(pwd)
+
+filter_minutes="3"
+filter_hours="24"
+filter_days="7"
+filter_weeks="4"
+filter_monthly="12"
+filter_years="0"
+bwlimit=""
+backup_dirs=""
+exit_status="0"
+do_del_old="no"
+port="22"
+compression=""
+rotation=""
+dryrun="no"
+
+while test "x$*" != x; do
+    case "$1" in 
+	( "--dryrun" )
+	    shift
+	    dryrun="yes";;
+	( "--rotation" )
+	    shift
+	    rotation=$(echo "$1" | perl -e '$_=<STDIN>; m/^([0-9]*)minutes([0-9]*)hours([0-9]*)days([0-9]*)weeks([0-9]*)month([0-9]*)years$/ || exit 1;                   
+print "minutes:$1\n";
+print "hours:$2\n";
+print "days:$3\n";
+print "weeks:$4\n";
+print "month:$5\n";
+print "years:$6\n";
+') || {
+		echo "the option to rotation were not right!"
+		print_usage
+}
+	    filter_minutes=$(echo "$rotation" | grep minutes | cut -f2 -d':')
+	    filter_hours=$(echo "$rotation" | grep hours | cut -f2 -d':')
+	    filter_days=$(echo "$rotation" | grep days | cut -f2 -d':')
+	    filter_weeks=$(echo "$rotation" | grep weeks | cut -f2 -d':')
+	    filter_monthly=$(echo "$rotation" | grep month | cut -f2 -d':')
+	    filter_years=$(echo "$rotation" | grep years | cut -f2 -d':')
+	    do_del_old="yes";
+	    shift;;
+	( "--port" )
+	    shift
+	    port="$1"
+	    shift;;
+	( "--bwlimit" )
+	    shift
+	    bwlimit="--bwlimit=$1"
+	    shift;;
+	( "--temp" )
+	    shift
+	    tmpdir="$1"
+	    shift;;
+	( "--compression" )
+	    compression="-z"
+	    shift;;
+	( "--dest" )
+	    shift;
+	    backup_destination="$(knead_dest_path "$1")";
+	    if ! test -d "$1"; then
+		echo "Destination dir $backup_destination does not exist or is not a directory"
+		exit 1
+	    fi
+	    shift;;
+	( [^-]* ) # The rest is sources
+	    if test "x$1" == "x"; then
+		echo "Missing source directories"
+		exit 1
+	    fi
+	    backup_dirs=""
+	    while test "x$*" != x; do
+		dir="$1"
+		if ! echo "$dir" | grep ":" >/dev/null; then
+		    remotehost="$(hostname)"
+		    dir="$remotehost:$(knead_source_path "$dir")"
+		else
+		    backuppath="$(echo "$dir" | cut -f2- -d':')"
+		    if echo "$dir" | grep "@" >/dev/null; then
+			remotehost=$(echo "$dir" | cut -f1 -d':' | cut -f2 -d'@')
+			remoteuser=$(echo "$dir" | cut -f1 -d':' | cut -f1 -d'@')
+		    else
+			remotehost=$(echo "$dir" | cut -f1 -d':')
+			remoteuser="$(whoami)"
+		    fi
+
+		    #remotehost=$(full_name $remotehost)
+
+		    if echo "$dir" | cut -f2- -d':' | grep "^/" >/dev/null; then
+			abolutepart=""
+		    else
+			absolutepart=$(ssh $remotehost pwd)"/"
+		    fi
+	
+		    dir="$remoteuser@$remotehost:$absolutepart$backuppath"
+		fi
+		backup_dirs="$backup_dirs $(knead_source_path "$dir")"
+		shift
+	    done;;
+	( * )
+	    print_usage
+	    exit 1;;
+    esac
+done
+
+check_for_programs
+
+tmpdir=${tmpdir:-"$backup_destination"}
+rsync_options="-azv -T $tmpdir --force --relative --hard-links --delete $bwlimit" # --stats"
+
+# to speed up checking for files outside the backup areas
+bdirmatch=$(
+    first="yes"
+    echo -n "^("
+    for d in $backup_dirs; do
+	dir="$d"
+	if test "$first" == "yes"; then
+	    if echo "$dir" | grep ":" >/dev/null; then
+		dir_wo_user=$(echo "$dir" | cut -f2- -d'@')
+		echo -n "./$dir_wo_user/"
+	    else
+		echo -n ".$dir/"
+	    fi
+	    first="no"
+	else
+	    if echo "$dir" | grep ":" >/dev/null; then
+		dir_wo_user=$(echo "$dir" | cut -f2- -d'@')
+		echo -n "|./$dir_wo_user/"
+	    else
+		echo -n "|.$dir/"
+	    fi
+	fi
+    done
+    echo -n ")"
+)
+
+echo "bdirmatch: $bdirmatch"
+
+lock_destination
+
+if test "x$backup_dirs" != x; then
+    make_backup
+fi
+
+if test "x$do_del_old" == xyes; then
+    delete_old_backup
+fi
+
+unlock_destination
+exit $exit_status
