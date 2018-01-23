@@ -10,11 +10,12 @@
 # undergone some bugfixes and enhancements.
 #
 # Bugfixes and enhancements:
-# Copyright (c) 2012 Marcel Pennewiss (opensource@pennewiss.de)
+# Copyright (c) 2012-2018 Marcel Pennewiss (opensource@pennewiss.de)
 #
 # Changelog:
-#   0.15 - adding identity (ssh key), exclude-from, sudo and stats option
-#          cleanup temporary files
+#   0.15   - Adding identity (ssh key), exclude-from, sudo and stats option
+#            Cleanup temporary files
+#   0.15.1 - Fix rsync stats extraction
 
 print_usage()
 {
@@ -22,7 +23,7 @@ print_usage()
 
 NAME
         Bontmia - Backup Over Network To Multiple Incremental Archives
-        Version 0.15
+        Version 0.15.1
 
 SYNOPSIS
         bontmia --dest <dest. dir> [options] [source dir [source dir ...]]
@@ -210,7 +211,7 @@ output_rsync_stats()
     echo ""
     echo "Rsync statistics"
     echo ""
-    cat /tmp/bontmia_rsync_output.$$ | sed -n '/^Number of files: [0-9]*$/,/^total size is$/p'
+    cat /tmp/bontmia_rsync_output.$$ | sed -n '/^Number of files: [0-9]*.*$/,/^total size is$/p'
 }
 
 lock_destination()
