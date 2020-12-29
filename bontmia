@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 #
 # bontmia (Backup Over Network To Multiple Incremental Archives)
 #
@@ -290,13 +290,13 @@ handle_last_unfinished()
 }
 
 
-make_hard-link_copy_of_last_backup()
+make_hard_link_copy_of_last_backup()
 {
     last_backup=$(find ${backup_destination} -maxdepth 4 -mindepth 4 | sort | tail -1)
     if test x${last_backup} != x ; then
 	echo "Making a hard-link replication of the last backup"
 	echo "  (${last_backup})"
-	if test "x${dryrun}" == "xno"; then
+	if test "x${dryrun}" = "xno"; then
 	    mkdir -p "${tmpdir}/unfinished_backup/${this_backup}" || {
 		unlock_destination
 		exit 1
@@ -309,7 +309,7 @@ make_hard-link_copy_of_last_backup()
 	first="no"
     else
 	echo "No previous backup detected, will start with an empty replication"
-	if test "x${dryrun}" == "xno"; then
+	if test "x${dryrun}" = "xno"; then
 	    mkdir -p "${tmpdir}/unfinished_backup/$this_backup" || {
 		unlock_destination
 		exit 1
@@ -326,7 +326,7 @@ moving_complete_backup_into_archive()
     echo "Moving the complete backup into the backup archive"
     echo "  ($tmpdir/unfinished_backup -> $backup_destination/)"
     
-    if test "x$dryrun" == "xno"; then
+    if test "x$dryrun" = "xno"; then
 	mkdir -p "$backup_destination/$this_backup" || {
 	    unlock_destination
 	    exit 1
@@ -357,11 +357,11 @@ make_backup()
     do_the_backup_exist "$this_backup"
 
     handle_last_unfinished
-    make_hard-link_copy_of_last_backup
+    make_hard_link_copy_of_last_backup
 
     # Apply changes to the hard-link copy
     echo
-    if test "x$first" == "xyes"; then
+    if test "x$first" = "xyes"; then
 	echo "Backing up"
     else
 	echo "Backing up by modifying the replication"
@@ -373,12 +373,12 @@ make_backup()
 	hostname=$(echo "$dir" | cut -f2- -d'@' | cut -f1 -d':')":"
 	userhost=$(echo "$dir" | cut -f1 -d':')
 
-	if test "x$hostname" == "x$(hostname):"; then
+	if test "x$hostname" = "x$(hostname):"; then
 	    # remove hostname from dir to speed up local backup
 	    dir=$(echo "$dir" | cut -f2 -d':')
 	fi
 
-	if test "x$dryrun" == "xno"; then
+	if test "x$dryrun" = "xno"; then
 	    mkdir -p "$tmpdir/unfinished_backup/$this_backup/$hostname"
 
 	    rsync ${rsync_options} ${rsyncpath:+"${rsyncpath}"} -e "ssh -p $port $identity" "${dir}/" "${tmpdir}/unfinished_backup/$this_backup/${hostname}" 2>&1 >/tmp/bontmia_rsync_output.$$ || {
@@ -409,7 +409,7 @@ make_backup()
     
     moving_complete_backup_into_archive
 
-    if test "x$dryrun" == "xno"; then
+    if test "x$dryrun" = "xno"; then
 	chmod -R u+w ${tmpdir}/unfinished_backup
 	rm -rf "$tmpdir/unfinished_backup"
     fi
@@ -472,13 +472,13 @@ delete_old_backup()
 	for archive in */*/*/*; do
 	    if ! echo "${archives_to_save}" | grep "^${archive}$" >/dev/null; then
 		echo "  Removing ${backup_destination}/$archive"
-		if test "x$dryrun" == "xno"; then
+		if test "x$dryrun" = "xno"; then
 		    chmod -R u+w ${archive}
 		    rm -rf ${archive}
 		    rmdir -p $(echo ${archive} | cut -f1-3 -d'/') 2>/dev/null
 		fi
 	    else
-		echo -n "  Saving ${backup_destination}/$archive by filters:  "
+		printf "  Saving %s/%s by filters:  " "$backup_destination" "$archive"
 		filters=$(echo "$archives_with_filter" | grep "${archive}" | cut -f2 -d'@')
 		echo $filters
 	    fi
@@ -494,7 +494,7 @@ delete_outside_sync()
 
     echo
     echo "Deletes files that should not be in the latest snapshot"
-    if test "x$dryrun" == "xno"; then
+    if test "x$dryrun" = "xno"; then
 	(
 	    cd $1
 	    IFS='
@@ -563,7 +563,7 @@ knead_dest_path()
 check_program()
 {
     program="$1"
-    type -a "$program" >/dev/null 2>&1 } || {
+    command -v "$program" >/dev/null 2>&1 || {
 	echo "You need $program installed and in the path"
 	echo "Aborting"
 	unlock_destination
@@ -614,7 +614,7 @@ check_for_programs()
 #################################################################
 
 
-if test "x$*" == x; then
+if test "x$*" = x; then
     print_usage
 fi
 
@@ -702,8 +702,8 @@ print "years:$6\n";
 		exit 1
 	    fi
 	    shift;;
-	( [^-]* ) # The rest is sources
-	    if test "x$1" == "x"; then
+	( [!-]* ) # The rest is sources
+	    if test "x$1" = "x"; then
 		echo "Missing source directories"
 		exit 1
 	    fi
@@ -750,27 +750,27 @@ rsync_options="-azv -T $tmpdir --force --relative --hard-links --delete $bwlimit
 # to speed up checking for files outside the backup areas
 bdirmatch=$(
     first="yes"
-    echo -n "^("
+    printf '^('
     for d in $backup_dirs; do
 	dir="$d"
-	if test "$first" == "yes"; then
+	if test "$first" = "yes"; then
 	    if echo "$dir" | grep ":" >/dev/null; then
 		dir_wo_user=$(echo "$dir" | cut -f2- -d'@')
-		echo -n "./$dir_wo_user/"
+		printf "./%s/" "$dir_wo_user"
 	    else
-		echo -n ".$dir/"
+		printf ".%s/" "$dir"
 	    fi
 	    first="no"
 	else
 	    if echo "$dir" | grep ":" >/dev/null; then
 		dir_wo_user=$(echo "$dir" | cut -f2- -d'@')
-		echo -n "|./$dir_wo_user/"
+		printf "|./%s/" "$dir_wo_user"
 	    else
-		echo -n "|.$dir/"
+		printf '|.%s/' "$dir"
 	    fi
 	fi
     done
-    echo -n ")"
+    printf ')'
 )
 
 echo "bdirmatch: $bdirmatch"
@@ -781,7 +781,7 @@ if test "x$backup_dirs" != x; then
     make_backup
 fi
 
-if test "x$do_del_old" == xyes; then
+if test "x$do_del_old" = xyes; then
     delete_old_backup
 fi
 
