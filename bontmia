@@ -10,13 +10,14 @@
 # undergone some bugfixes and enhancements.
 #
 # Bugfixes and enhancements:
-# Copyright (c) 2012-2021 Marcel Pennewiss (opensource@pennewiss.de)
+# Copyright (c) 2012-2022 Marcel Pennewiss (opensource@pennewiss.de)
 #
 # Changelog:
 #   0.15   - Adding identity (ssh key), exclude-from, sudo and stats option
 #            Cleanup temporary files
 #   0.15.1 - Fix rsync stats extraction
 #   0.16   - Make POSIX compatible (contribution by Joakim Roubert)
+#   0.20   - Fix compression param (do not use compression as default anymore)
 
 print_usage()
 {
@@ -24,7 +25,7 @@ print_usage()
 
 NAME
         Bontmia - Backup Over Network To Multiple Incremental Archives
-        Version 0.16
+        Version 0.20
 
 SYNOPSIS
         bontmia --dest <dest. dir> [options] [source dir [source dir ...]]
@@ -108,6 +109,9 @@ OPTIONS
                 handy when you want to ensure that you do not remove
                 all the precious backups when used in combination with
                 the rotation option.
+
+        --compression
+                Use rsync compression during the file data transfer
 
         --bwlimit <number>
                 Specifies a maximum transfer rate in kilobytes per
@@ -746,7 +750,7 @@ done
 check_for_programs
 
 tmpdir=${tmpdir:-"$backup_destination"}
-rsync_options="-azv -T $tmpdir --force --relative --hard-links --delete $bwlimit $excludefrom $stats"
+rsync_options="-av -T $tmpdir --force --relative --hard-links --delete $compression $bwlimit $excludefrom $stats"
 
 # to speed up checking for files outside the backup areas
 bdirmatch=$(

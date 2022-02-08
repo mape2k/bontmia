@@ -13,7 +13,10 @@ directories.  Only new/changed files takes up space when generating a
 new snapshot.  Remote access is done over ssh.  More info is available
 at http://folk.uio.no/johnen/bontmia/
 
-
+Breaking Changes
+----------------
+* Version 0.20
+  * rsync compression is disabled by default (instead of enabled by default)
 
 COPYRIGHT
 ---------
