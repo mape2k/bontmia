@@ -430,9 +430,6 @@ delete_old_backup()
 
     # by saving the x last, the backups will not be deleted even if no
     # new backups is created
-
-#    archives_to_save=$( (
-
     archives_with_filter=$(
 	    if ! test "0$filter_minutes" -ge 0 2>/dev/null; then
 		print_usage
