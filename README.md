@@ -1,9 +1,10 @@
 bontmia
 =======
 
-Bontmia (Backup Over Network To Multiple Incremental Archives)
-WHAT IS BONTMIA
----------------
+Bontmia - Backup Over Network To Multiple Incremental Archives
+
+What is bontmia?
+----------------
 
 It stands for Backup Over Network To Multiple Incremental Archives and
 is a network based backup with similar backup scheme as with tapes.
