@@ -18,6 +18,7 @@
 #   0.15.1 - Fix rsync stats extraction
 #   0.16   - Make POSIX compatible (contribution by Joakim Roubert)
 #   0.20   - Fix compression param (do not use compression as default anymore)
+#   0.21   - Fix week filter to ISO year of weeknumber (hint by Pavel Rochnyak)
 
 print_usage()
 {
@@ -25,7 +26,7 @@ print_usage()
 
 NAME
         Bontmia - Backup Over Network To Multiple Incremental Archives
-        Version 0.20
+        Version 0.21
 
 SYNOPSIS
         bontmia --dest <dest. dir> [options] [source dir [source dir ...]]
@@ -430,8 +431,6 @@ delete_old_backup()
     # by saving the x last, the backups will not be deleted even if no
     # new backups is created
 
-#    archives_to_save=$( (
-
     archives_with_filter=$(
 	    if ! test "0$filter_minutes" -ge 0 2>/dev/null; then
 		print_usage
@@ -454,7 +453,7 @@ delete_old_backup()
 	    if ! test "0$filter_weeks" -ge 0 2>/dev/null; then
 		print_usage
 	    else
-		filter_template "%Y-%V" "" "$filter_weeks" "-u -k 3 -t @" "weeks"
+		filter_template "%G-%V" "" "$filter_weeks" "-u -k 3 -t @" "weeks"
 	    fi
 
 	    if ! test "0$filter_monthly" -ge 0 2>/dev/null; then
